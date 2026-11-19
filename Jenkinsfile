@@ -17,13 +17,11 @@ pipeline {
 
         stage('Build Docker Images') {
             steps {
-                script {
-                    echo "Building Backend Docker image..."
-                    sh "docker build -t ${IMAGE_BACKEND}:latest -t ${IMAGE_BACKEND}:${BUILD_NUMBER} ./backend"
+                echo "Building Backend Docker image..."
+                sh 'docker build -t ${IMAGE_BACKEND}:latest -t ${IMAGE_BACKEND}:${BUILD_NUMBER} ./backend'
 
-                    echo "Building Frontend Docker image with relative API base..."
-                    sh "docker build --build-arg VITE_API_BASE_URL=\"\" -t ${IMAGE_FRONTEND}:latest -t ${IMAGE_FRONTEND}:${BUILD_NUMBER} ./frontend"
-                }
+                echo "Building Frontend Docker image with relative API base..."
+                sh 'docker build -t ${IMAGE_FRONTEND}:latest -t ${IMAGE_FRONTEND}:${BUILD_NUMBER} --build-arg VITE_API_BASE_URL="" ./frontend'
             }
         }
 
