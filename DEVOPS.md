@@ -101,28 +101,27 @@ ssh_command     = "ssh -i devops-key.pem -o StrictHostKeyChecking=no ubuntu@54.2
 
 ---
 
-## 5. CI/CD Pipeline Setup
+## 5. CI/CD Pipeline Architecture
 
-### GitHub Actions Secrets
-In your GitHub repository settings under **Settings > Secrets and variables > Actions**, configure:
+The application implements a decoupled CI/CD strategy:
+- **CI (GitHub Actions):** Triggered on pushes to `main`. Builds and pushes multi-stage Docker images to GitHub Container Registry (`ghcr.io`).
+- **CD (Jenkins):** Declarative `Jenkinsfile` that builds, pushes to GHCR, transfers `docker-compose.prod.yml` to the EC2 host via SSH, restarts containers, and verifies application health.
 
-| Secret Name | Value | Description |
-| :--- | :--- | :--- |
-| `EC2_HOST` | `54.253.181.175` | Elastic/Public IP address of the EC2 instance |
-| `EC2_SSH_KEY` | Contents of `terraform/devops-key.pem` | Full PEM private key (including `-----BEGIN RSA PRIVATE KEY-----`) |
+### Jenkins Pipeline Credentials
+In Jenkins (**Manage Jenkins > Credentials > System > Global credentials**), configure:
+- `github-container-registry`: Username with password/token (GitHub username and Personal Access Token with `write:packages` permission).
+- `ec2-ssh-key`: SSH Username with private key (Username: `ubuntu`, Private Key: contents of `terraform/devops-key.pem`).
+- `EC2_HOST` (Optional environment/parameter override, defaults to `54.253.181.175`).
 
-### Pipeline Workflow (`.github/workflows/ci-cd.yml`)
-1. **Trigger:** Push to `main` branch or manual `workflow_dispatch`.
-2. **Stage 1 (Build & Push):**
-   - Authenticates with GHCR using automated `GITHUB_TOKEN`.
-   - Builds multi-stage images for backend and frontend.
-   - Pushes images tagged with `latest` and `${{ github.sha }}`.
-3. **Stage 2 (Deploy via SSH):**
-   - Securely copies `docker-compose.prod.yml` to `/home/ubuntu/app/docker-compose.yml` via SCP.
-   - Creates `/home/ubuntu/app/.env` with production safe defaults if missing.
-   - Authenticates Docker on the EC2 host with GHCR.
+### Jenkins Pipeline Stages (`Jenkinsfile`)
+1. **Checkout:** Clones the repository.
+2. **Build Docker Images:** Builds backend and frontend production images.
+3. **Push to GHCR:** Authenticates with `ghcr.io` and pushes `latest` and `${BUILD_NUMBER}` tags.
+4. **Deploy to EC2 via SSH:**
+   - Transfstream copies `docker-compose.prod.yml` to `ubuntu@$EC2_HOST:/home/ubuntu/app/docker-compose.yml`.
+   - Creates `/home/ubuntu/app/.env` with safe production defaults if missing.
    - Executes `docker compose pull && docker compose up -d --remove-orphans`.
-   - Runs automated healthcheck verification via `curl -sf http://localhost/api/hello/`.
+   - Verifies the deployed endpoint via `curl -sf http://localhost/api/hello/`.
 
 ---
 

@@ -5,8 +5,7 @@ pipeline {
         REGISTRY = 'ghcr.io'
         IMAGE_BACKEND = 'ghcr.io/adi-git-hub/devops-fullstack-backend'
         IMAGE_FRONTEND = 'ghcr.io/adi-git-hub/devops-fullstack-frontend'
-        GHCR_CREDS = credentials('github-container-registry')
-        EC2_HOST = credentials('ec2-host-ip')
+        EC2_HOST = "${env.EC2_HOST ?: '54.253.181.175'}"
     }
 
     stages {
@@ -30,43 +29,55 @@ pipeline {
 
         stage('Push to GHCR') {
             steps {
-                script {
-                    echo "Authenticating with GHCR..."
-                    sh "echo \$GHCR_CREDS_PSW | docker login ghcr.io -u \$GHCR_CREDS_USR --password-stdin"
-
-                    echo "Pushing images..."
-                    sh "docker push ${IMAGE_BACKEND}:latest"
-                    sh "docker push ${IMAGE_BACKEND}:${BUILD_NUMBER}"
-                    sh "docker push ${IMAGE_FRONTEND}:latest"
-                    sh "docker push ${IMAGE_FRONTEND}:${BUILD_NUMBER}"
+                withCredentials([usernamePassword(credentialsId: 'github-container-registry', usernameVariable: 'GHCR_USER', passwordVariable: 'GHCR_TOKEN')]) {
+                    sh '''
+                        echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+                        docker push ${IMAGE_BACKEND}:latest
+                        docker push ${IMAGE_BACKEND}:${BUILD_NUMBER}
+                        docker push ${IMAGE_FRONTEND}:latest
+                        docker push ${IMAGE_FRONTEND}:${BUILD_NUMBER}
+                    '''
                 }
             }
         }
 
         stage('Deploy to EC2 via SSH') {
             steps {
-                sshagent(['ec2-ssh-key']) {
+                withCredentials([
+                    sshUserPrivateKey(credentialsId: 'ec2-ssh-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USER')
+                ]) {
                     sh '''
-                        scp -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@${EC2_HOST}:/home/ubuntu/app/docker-compose.yml
-                        ssh -o StrictHostKeyChecking=no ubuntu@${EC2_HOST} << 'EOF'
+                        set -e
+                        echo "Copying docker-compose.prod.yml to ubuntu@${EC2_HOST}..."
+                        scp -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@${EC2_HOST}:/home/ubuntu/app/docker-compose.yml
+
+                        echo "Executing deployment on EC2..."
+                        ssh -i "$SSH_KEY_FILE" -o StrictHostKeyChecking=no ubuntu@${EC2_HOST} << 'EOF'
                             set -e
                             cd /home/ubuntu/app
 
+                            # Ensure .env exists with production safe defaults
                             if [ ! -f .env ]; then
                                 cat << 'ENVFILE' > .env
 DEBUG=False
-SECRET_KEY=prod-secret-key-jenkins-autogen
+SECRET_KEY=prod-secret-key-$(openssl rand -hex 16 2>/dev/null || echo "jenkins-auto-secret-key-12345")
 ALLOWED_HOSTS=*
 CORS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
 CORS_ALLOW_ALL_ORIGINS=True
 ENVFILE
                             fi
 
+                            # Pull latest images from GHCR
                             docker compose pull
+
+                            # Start containers
                             docker compose up -d --remove-orphans
+
+                            # Verify health
+                            echo "Waiting for services to become healthy..."
                             sleep 6
                             curl -sf http://localhost/api/hello/
-                            echo "Jenkins deployment successfully verified!"
+                            echo "Deployment successfully verified on EC2!"
 EOF
                     '''
                 }
@@ -79,10 +90,10 @@ EOF
             sh 'docker logout ghcr.io || true'
         }
         success {
-            echo "CI/CD Pipeline executed successfully!"
+            echo "Jenkins Pipeline executed successfully!"
         }
         failure {
-            echo "Pipeline execution failed. Check build logs for details."
+            echo "Jenkins Pipeline failed. Please check build logs."
         }
     }
 }
