@@ -64,41 +64,46 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Copy docker-compose.prod.yml to EC2
-        uses: appleboy/scp-action@v1.2.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          source: "docker-compose.prod.yml"
-          target: "/home/ubuntu/app"
+      - name: Deploy to EC2 via native SSH & SCP
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$EC2_SSH_KEY" > ~/.ssh/deploy_key.pem
+          chmod 600 ~/.ssh/deploy_key.pem
 
-      - name: Deploy and Verify Containers on EC2
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ubuntu
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
+          # Ensure app directory exists on EC2
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "mkdir -p /home/ubuntu/app"
+
+          # Securely transfer production compose file
+          scp -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no docker-compose.prod.yml ubuntu@$EC2_HOST:/home/ubuntu/app/docker-compose.yml
+
+          # Execute deployment and verification remotely
+          ssh -i ~/.ssh/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "bash -s" "$GITHUB_ACTOR" "$GITHUB_TOKEN" << 'EOF'
             set -e
+            ACTOR="$1"
+            TOKEN="$2"
+
             cd /home/ubuntu/app
-            mv -f docker-compose.prod.yml docker-compose.yml
 
             # Ensure .env exists with production safe defaults
             if [ ! -f .env ]; then
-              cat << 'EOF' > .env
-            DEBUG=False
-            SECRET_KEY=prod-secret-key-$(openssl rand -hex 16)
-            ALLOWED_HOSTS=*
-            CORS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1,http://${{ secrets.EC2_HOST }}
-            CORS_ALLOW_ALL_ORIGINS=True
-            EOF
+              cat << 'ENVFILE' > .env
+          DEBUG=False
+          SECRET_KEY=prod-secret-key-$(openssl rand -hex 16)
+          ALLOWED_HOSTS=*
+          CORS_ALLOWED_ORIGINS=http://localhost,http://127.0.0.1
+          CORS_ALLOW_ALL_ORIGINS=True
+          ENVFILE
             fi
 
             # Log in to GHCR to pull package images
-            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
 
-            # Pull and restart services
+            # Pull latest images and restart containers
             docker compose pull
             docker compose up -d --remove-orphans
 
@@ -107,3 +112,7 @@ jobs:
             sleep 8
             curl -sf http://localhost/api/hello/
             echo "CI/CD deployment verified successfully!"
+          EOF
+
+          # Clean up private key from runner
+          rm -f ~/.ssh/deploy_key.pem
