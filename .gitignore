@@ -1,0 +1,36 @@
+# Environment variables
+.env
+.env.*
+!.env.example
+frontend/.env
+frontend/.env.*
+
+# Python / Django
+backend/venv/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+backend/**/__pycache__/
+db.sqlite3
+staticfiles/
+
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / Editor
+.DS_Store
+.vscode/
+.idea/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/*.tfstate.backup
+terraform/*.pem
+*.tfstate
+*.tfstate.backup
+*.pem
+
